@@ -1,51 +1,49 @@
 import requests
-import json
+import hashlib
 import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-URL = "https://trouverunlogement.lescrous.fr/api/fr/search/47?bounds=3.8070597_43.6533542_3.9413208_43.5667088"
-STATE_FILE = "last_state.json"
+URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=3.8070597_43.6533542_3.9413208_43.5667088&locationName=Montpellier"
+STATE_FILE = "last_hash.txt"
 EMAIL_FROM = os.environ["EMAIL_ADDRESS"]
 EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 EMAIL_TO = os.environ["EMAIL_ADDRESS"]
 
-def fetch_logements():
+def fetch_page_hash():
     headers = {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    r = requests.get(URL, headers=headers)
+    r = requests.get(URL, headers=headers, timeout=15)
     r.raise_for_status()
-    data = r.json()
-    items = data.get("data", {}).get("items", [])
-    return items
+    return hashlib.md5(r.text.encode()).hexdigest(), r.text
 
-def load_state():
+def load_hash():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
-            return json.load(f)
-    return []
+            return f.read().strip()
+    return None
 
-def save_state(items):
+def save_hash(h):
     with open(STATE_FILE, "w") as f:
-        json.dump(items, f)
+        f.write(h)
 
-def send_email(new_items):
+def send_email(page_text):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
-    msg["Subject"] = "🏠 Nouveau logement CROUS disponible à Montpellier !"
+    msg["Subject"] = "🏠 CROUS Montpellier — La page a changé !"
 
-    body = "Des logements viennent d'apparaître sur le site CROUS :\n\n"
-    for item in new_items:
-        nom = item.get("title", "Résidence inconnue")
-        adresse = item.get("address", "Adresse non disponible")
-        lien = f"https://trouverunlogement.lescrous.fr/tools/47/search?bounds=3.8070597_43.6533542_3.9413208_43.5667088"
-        body += f"- {nom}\n  {adresse}\n  {lien}\n\n"
-
-    body += "Postule immédiatement sur : https://trouverunlogement.lescrous.fr\n"
+    body = (
+        "La page CROUS de Montpellier vient de changer.\n\n"
+        "Va vérifier immédiatement :\n"
+        "https://trouverunlogement.lescrous.fr/tools/47/search?"
+        "bounds=3.8070597_43.6533542_3.9413208_43.5667088&locationName=Montpellier\n\n"
+        "Postule sans attendre !"
+    )
     msg.attach(MIMEText(body, "plain"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -56,17 +54,21 @@ def send_email(new_items):
 
 def main():
     print("Vérification en cours...")
-    current_items = fetch_logements()
-    previous_ids = {item.get("id") for item in load_state()}
-    new_items = [item for item in current_items if item.get("id") not in previous_ids]
+    current_hash, page_text = fetch_page_hash()
+    previous_hash = load_hash()
 
-    if new_items:
-        print(f"{len(new_items)} nouveau(x) logement(s) trouvé(s) !")
-        send_email(new_items)
+    print(f"Hash actuel   : {current_hash}")
+    print(f"Hash précédent: {previous_hash}")
+
+    if previous_hash is None:
+        print("Premier lancement — hash sauvegardé.")
+    elif current_hash != previous_hash:
+        print("Changement détecté !")
+        send_email(page_text)
     else:
-        print("Aucun nouveau logement.")
+        print("Aucun changement.")
 
-    save_state(current_items)
+    save_hash(current_hash)
 
 if __name__ == "__main__":
     main()
